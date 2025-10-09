@@ -51,13 +51,15 @@ impl MessageStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossChainMessage {
-    pub id: String,
-    pub source_chain: String,
-    pub dest_chain: String,
-    pub message_content: String,
-    pub status: MessageStatus,
-    pub timestamp: DateTime<Utc>,
-    pub tx_hash: Option<String>,
+    pub id: String,                      // Message hash (64-char hex)
+    pub source_chain: String,            // Source chain (e.g., "Paseo")
+    pub dest_chain: String,              // Destination chain (e.g., "Base Sepolia")
+    pub commitment: String,              // Cryptographic proof (derived from message)
+    pub nonce: u64,                      // Unique sequence number
+    pub status: MessageStatus,           // Current status
+    pub timestamp: DateTime<Utc>,        // When dispatched
+    pub fee: String,                     // Fee paid (in DAI or native token)
+    pub relayer: Option<String>,         // Relayer address (if delivered)
 }
 
 // ============================================================================
@@ -70,19 +72,19 @@ const BACKEND_URL: &str = "http://127.0.0.1:8080";
 struct DispatchRequest {
     source: String,
     destination: String,
-    content: String,
+    message_hash: String,  // 64-char hex hash
 }
 
 /// Dispatch a message to the backend API
 async fn dispatch_message_api(
     source: String,
     destination: String,
-    content: String,
+    message_hash: String,
 ) -> Result<CrossChainMessage, String> {
     let request_body = DispatchRequest {
         source,
         destination,
-        content,
+        message_hash,
     };
 
     let response = Request::post(&format!("{}/api/dispatch", BACKEND_URL))
@@ -107,35 +109,44 @@ async fn dispatch_message_api(
 /// Generate realistic testnet message examples
 fn generate_testnet_examples() -> Vec<CrossChainMessage> {
     use chrono::Utc;
-    use uuid::Uuid;
+    
+    let msg1_id = "0x8dd8443f837f2bbcd9c5b27e47587aa5ffd573c15c87e0f2d19ce89f6a9e9c7a".to_string();
+    let msg2_id = "0x7cc7332e726e1aa3b9c4b16d36476476aa4ec462b2ae9e1f1d18ce78f5a8e8c6".to_string();
+    let msg3_id = "0x6bb6221d615d0992a8c3a05e25365365aa3db351a1ad8d0e0c07bd67e4979b5a".to_string();
     
     vec![
         CrossChainMessage {
-            id: Uuid::new_v4().to_string(),
-            source_chain: "paseo".to_string(),
-            dest_chain: "base-sepolia".to_string(),
-            message_content: "Transfer 100 DOT tokens to Base Sepolia".to_string(),
+            id: msg1_id.clone(),
+            source_chain: "Paseo".to_string(),
+            dest_chain: "Base Sepolia".to_string(),
+            commitment: derive_commitment_hash(&msg1_id),
+            nonce: 12345,
             status: MessageStatus::Delivered,
             timestamp: Utc::now(),
-            tx_hash: Some("0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234567890".to_string()),
+            fee: "0.5 DAI".to_string(),
+            relayer: Some("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb".to_string()),
         },
         CrossChainMessage {
-            id: Uuid::new_v4().to_string(),
-            source_chain: "base-sepolia".to_string(),
-            dest_chain: "paseo".to_string(),
-            message_content: "Execute smart contract function: updateOraclePrice(ETH, 2500)".to_string(),
+            id: msg2_id.clone(),
+            source_chain: "Base Sepolia".to_string(),
+            dest_chain: "Paseo".to_string(),
+            commitment: derive_commitment_hash(&msg2_id),
+            nonce: 12346,
             status: MessageStatus::InTransit,
             timestamp: Utc::now(),
-            tx_hash: Some("0x2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef12345678901".to_string()),
+            fee: "0.3 DAI".to_string(),
+            relayer: None,
         },
         CrossChainMessage {
-            id: Uuid::new_v4().to_string(),
-            source_chain: "paseo".to_string(),
-            dest_chain: "base-sepolia".to_string(),
-            message_content: "Cross-chain NFT bridge: Transfer CryptoPunk #1234".to_string(),
+            id: msg3_id.clone(),
+            source_chain: "Paseo".to_string(),
+            dest_chain: "Arbitrum Sepolia".to_string(),
+            commitment: derive_commitment_hash(&msg3_id),
+            nonce: 12347,
             status: MessageStatus::Pending,
             timestamp: Utc::now(),
-            tx_hash: None,
+            fee: "0.4 DAI".to_string(),
+            relayer: None,
         },
     ]
 }
@@ -197,6 +208,52 @@ fn validate_message_content(content: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate that the message hash is in the correct format (64-char hex)
+fn validate_message_hash(hash: &str) -> Result<(), String> {
+    let trimmed = hash.trim();
+    
+    // Check if it starts with 0x
+    if !trimmed.starts_with("0x") {
+        return Err("Message hash must start with '0x'".to_string());
+    }
+    
+    // Remove 0x prefix
+    let hex_part = &trimmed[2..];
+    
+    // Check if it's exactly 64 characters (32 bytes in hex)
+    if hex_part.len() != 64 {
+        return Err(format!("Message hash must be 64 hex characters (found {}). Example: 0x8dd8443f837f2bbcd9c5b27e47587aa5ffd573c15c87e0f2d19ce89f6a9e9c7a", hex_part.len()));
+    }
+    
+    // Check if all characters are valid hex
+    if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Message hash contains invalid hex characters (must be 0-9, a-f, A-F)".to_string());
+    }
+    
+    Ok(())
+}
+
+/// Derive commitment hash from message hash
+/// In real ISMP, this is computed from the message content using cryptographic hashing
+fn derive_commitment_hash(message_hash: &str) -> String {
+    // Simulate ISMP commitment derivation
+    // Real implementation would use: keccak256(encode(request))
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    
+    let mut hasher = DefaultHasher::new();
+    format!("commitment_{}", message_hash).hash(&mut hasher);
+    let hash_value = hasher.finish();
+    
+    // Generate a 64-char hex commitment
+    format!("0x{:016x}{:016x}{:016x}{:016x}", 
+        hash_value, 
+        hash_value.wrapping_mul(31), 
+        hash_value.wrapping_mul(97),
+        hash_value.wrapping_mul(127)
+    )
+}
+
 // ============================================================================
 // Components
 // ============================================================================
@@ -207,14 +264,14 @@ pub fn App() -> impl IntoView {
     let (is_dispatching, set_is_dispatching) = signal(false);
     let (notification, set_notification) = signal(None::<String>);
 
-    let dispatch_message = move |source: String, destination: String, content: String| {
+    let dispatch_message = move |source: String, destination: String, message_hash: String| {
         web_sys::console::log_1(&"🚀 dispatch_message called from form".into());
         spawn_local(async move {
             web_sys::console::log_1(&"📡 Starting async dispatch...".into());
             set_is_dispatching.set(true);
             
             // Call the REAL backend API!
-            match dispatch_message_api(source, destination, content).await {
+            match dispatch_message_api(source, destination, message_hash).await {
                 Ok(message) => {
                     web_sys::console::log_1(&format!("✅ Got message from backend: {:?}", message.id).into());
                     
@@ -382,7 +439,7 @@ where
 {
     let (source_chain, set_source_chain) = signal(String::from("paseo"));
     let (dest_chain, set_dest_chain) = signal(String::from("base-sepolia"));
-    let (message_content, set_message_content) = signal(String::new());
+    let (message_hash, set_message_hash) = signal(String::new());
     let (error, set_error) = signal(None::<String>);
 
     let chains = vec![
@@ -399,7 +456,7 @@ where
 
         let source = source_chain.get();
         let dest = dest_chain.get();
-        let content = message_content.get();
+        let hash = message_hash.get();
 
         if source.is_empty() || dest.is_empty() {
             set_error.set(Some("Please select both source and destination chains".to_string()));
@@ -411,23 +468,19 @@ where
             return;
         }
 
-        if content.trim().is_empty() {
-            set_error.set(Some("Message content cannot be empty".to_string()));
-            return;
-        }
-
-        if content.len() > 500 {
-            set_error.set(Some("Message content must be less than 500 characters".to_string()));
+        if hash.trim().is_empty() {
+            set_error.set(Some("Message hash cannot be empty".to_string()));
             return;
         }
         
-        if let Err(validation_error) = validate_message_content(&content) {
+        // Validate message hash format
+        if let Err(validation_error) = validate_message_hash(&hash) {
             set_error.set(Some(validation_error));
             return;
         }
         
-        on_dispatch(source, dest, content.clone());
-        set_message_content.set(String::new());
+        on_dispatch(source, dest, hash.clone());
+        set_message_hash.set(String::new());
     };
 
     view! {
@@ -475,16 +528,16 @@ where
             </div>
 
             <div class="form-group">
-                <label>"Message Content"</label>
-                <textarea
+                <label>"Message Hash (Transaction ID)"</label>
+                <input
+                    type="text"
                     class="form-control"
-                    rows="4"
-                    placeholder="Enter your cross-chain message..."
-                    on:input=move |ev| set_message_content.set(event_target_value(&ev))
-                    prop:value=move || message_content.get()
+                    placeholder="0x8dd8443f837f2bbcd9c5b27e47587aa5ffd573c15c87e0f2d19ce89f6a9e9c7a"
+                    on:input=move |ev| set_message_hash.set(event_target_value(&ev))
+                    prop:value=move || message_hash.get()
                 />
-                <small class="char-count">
-                    {move || format!("{} / 500 characters", message_content.get().len())}
+                <small class="char-count" style="color: #666;">
+                    "64-character hex hash (e.g., from Hyperbridge Explorer)"
                 </small>
             </div>
 
@@ -553,25 +606,33 @@ fn MessageCard(message: CrossChainMessage) -> impl IntoView {
                     <span class="chain-badge dest">{message.dest_chain.clone()}</span>
                 </div>
 
-                <div class="message-content">
-                    <strong>"Message: "</strong>
-                    <p>{message.message_content.clone()}</p>
+                <div class="message-details" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; font-size: 0.9em;">
+                    <div>
+                        <strong>"Commitment: "</strong>
+                        <code style="font-size: 0.85em;">{format!("{}...{}", &message.commitment[..10], &message.commitment[message.commitment.len()-8..])}</code>
+                    </div>
+                    <div>
+                        <strong>"Nonce: "</strong>
+                        <span>{message.nonce}</span>
+                    </div>
+                    <div>
+                        <strong>"Fee: "</strong>
+                        <span>{message.fee.clone()}</span>
+                    </div>
+                    <div>
+                        <strong>"Relayer: "</strong>
+                        <span>
+                            {message.relayer.as_ref().map(|r| format!("{}...{}", &r[..6], &r[r.len()-4..]))
+                                .unwrap_or_else(|| "Pending".to_string())}
+                        </span>
+                    </div>
                 </div>
 
-                <div class="message-meta">
-                    <div class="timestamp">
+                <div class="message-meta" style="margin-top: 12px;">
+                    <small class="timestamp">
                         <span>"🕐 "</span>
                         {formatted_time}
-                    </div>
-                    {message.tx_hash.as_ref().map(|hash| {
-                        let short_hash = format!("{}...", &hash[..16]);
-                        view! {
-                            <div class="tx-hash">
-                                <strong>"TX: "</strong>
-                                <code>{short_hash}</code>
-                            </div>
-                        }
-                    })}
+                    </small>
                 </div>
             </div>
         </div>
@@ -598,5 +659,7 @@ fn StatusIndicator(status: MessageStatus) -> impl IntoView {
 
 fn main() {
     console_error_panic_hook::set_once();
+    web_sys::console::log_1(&"🚀 WASM loaded, mounting app...".into());
     leptos::mount::mount_to_body(App);
+    web_sys::console::log_1(&"✅ App mounted!".into());
 }

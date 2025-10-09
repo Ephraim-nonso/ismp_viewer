@@ -20,13 +20,15 @@ pub enum MessageStatus {
 #[cfg(feature = "backend")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossChainMessage {
-    pub id: String,
-    pub source_chain: String,
-    pub dest_chain: String,
-    pub message_content: String,
-    pub status: MessageStatus,
-    pub timestamp: DateTime<Utc>,
-    pub tx_hash: Option<String>,
+    pub id: String,                      // Message hash (64-char hex)
+    pub source_chain: String,            // Source chain
+    pub dest_chain: String,              // Destination chain
+    pub commitment: String,              // Cryptographic proof
+    pub nonce: u64,                      // Unique sequence number
+    pub status: MessageStatus,           // Current status
+    pub timestamp: DateTime<Utc>,        // When dispatched
+    pub fee: String,                     // Fee paid
+    pub relayer: Option<String>,         // Relayer address
 }
 
 #[cfg(feature = "backend")]
@@ -34,25 +36,46 @@ pub struct CrossChainMessage {
 struct DispatchRequest {
     source: String,
     destination: String,
-    content: String,
+    message_hash: String,  // 64-char hex hash
+}
+
+#[cfg(feature = "backend")]
+fn derive_commitment_hash(message_hash: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    
+    let mut hasher = DefaultHasher::new();
+    format!("commitment_{}", message_hash).hash(&mut hasher);
+    let hash_value = hasher.finish();
+    
+    format!("0x{:016x}{:016x}{:016x}{:016x}", 
+        hash_value, 
+        hash_value.wrapping_mul(31), 
+        hash_value.wrapping_mul(97),
+        hash_value.wrapping_mul(127)
+    )
 }
 
 #[cfg(feature = "backend")]
 async fn dispatch_message(Json(payload): Json<DispatchRequest>) -> Json<CrossChainMessage> {
     println!("📨 Received dispatch request: {:?}", payload);
     
-    // TODO: Integrate ISMP here
+    // TODO: Integrate ISMP here - this will use real pallet-hyperbridge
     let message = CrossChainMessage {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: payload.message_hash.clone(),
         source_chain: payload.source,
         dest_chain: payload.destination,
-        message_content: payload.content,
-        status: MessageStatus::Pending,  // Use the enum, not a string!
+        commitment: derive_commitment_hash(&payload.message_hash),
+        nonce: (chrono::Utc::now().timestamp() % 100000) as u64,  // Simulate nonce
+        status: MessageStatus::Pending,
         timestamp: Utc::now(),
-        tx_hash: Some(format!("0x{}", uuid::Uuid::new_v4().to_string().replace("-", ""))),
+        fee: "0.5 DAI".to_string(),  // Default fee
+        relayer: None,  // No relayer yet (pending)
     };
     
-    println!("✅ Dispatched message: {:?}", message.id);
+    println!("✅ Dispatched message: {}", message.id);
+    println!("   Commitment: {}", message.commitment);
+    println!("   Nonce: {}", message.nonce);
     
     Json(message)
 }
