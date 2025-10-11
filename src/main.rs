@@ -2,11 +2,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::js_sys;
 use gloo_net::http::Request;
-use wasm_bindgen::prelude::*;
 
 // ============================================================================
 // Data Structures
@@ -106,50 +104,6 @@ async fn dispatch_message_api(
     Ok(message)
 }
 
-/// Generate realistic testnet message examples
-fn generate_testnet_examples() -> Vec<CrossChainMessage> {
-    use chrono::Utc;
-    
-    let msg1_id = "0x8dd8443f837f2bbcd9c5b27e47587aa5ffd573c15c87e0f2d19ce89f6a9e9c7a".to_string();
-    let msg2_id = "0x7cc7332e726e1aa3b9c4b16d36476476aa4ec462b2ae9e1f1d18ce78f5a8e8c6".to_string();
-    let msg3_id = "0x6bb6221d615d0992a8c3a05e25365365aa3db351a1ad8d0e0c07bd67e4979b5a".to_string();
-    
-    vec![
-        CrossChainMessage {
-            id: msg1_id.clone(),
-            source_chain: "Paseo".to_string(),
-            dest_chain: "Base Sepolia".to_string(),
-            commitment: derive_commitment_hash(&msg1_id),
-            nonce: 12345,
-            status: MessageStatus::Delivered,
-            timestamp: Utc::now(),
-            fee: "0.5 DAI".to_string(),
-            relayer: Some("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb".to_string()),
-        },
-        CrossChainMessage {
-            id: msg2_id.clone(),
-            source_chain: "Base Sepolia".to_string(),
-            dest_chain: "Paseo".to_string(),
-            commitment: derive_commitment_hash(&msg2_id),
-            nonce: 12346,
-            status: MessageStatus::InTransit,
-            timestamp: Utc::now(),
-            fee: "0.3 DAI".to_string(),
-            relayer: None,
-        },
-        CrossChainMessage {
-            id: msg3_id.clone(),
-            source_chain: "Paseo".to_string(),
-            dest_chain: "Arbitrum Sepolia".to_string(),
-            commitment: derive_commitment_hash(&msg3_id),
-            nonce: 12347,
-            status: MessageStatus::Pending,
-            timestamp: Utc::now(),
-            fee: "0.4 DAI".to_string(),
-            relayer: None,
-        },
-    ]
-}
 
 /// Query message status (stub for now, will be implemented in Phase 2C)
 async fn query_message_status_stub(_message_id: String) -> Result<MessageStatus, String> {
@@ -170,42 +124,6 @@ async fn query_message_status_stub(_message_id: String) -> Result<MessageStatus,
         2 => MessageStatus::Delivered,
         _ => MessageStatus::Failed,
     })
-}
-
-fn validate_message_content(content: &str) -> Result<(), String> {
-    let trimmed = content.trim();
-    
-    if trimmed.len() < 3 {
-        return Err("Message is too short. Please provide a meaningful message.".to_string());
-    }
-    
-    let letter_count = trimmed.chars().filter(|c| c.is_alphabetic()).count();
-    if letter_count < 3 {
-        return Err("Message must contain at least some letters.".to_string());
-    }
-    
-    let mut consecutive_count = 1;
-    let mut prev_char = '\0';
-    for c in trimmed.chars() {
-        if c == prev_char {
-            consecutive_count += 1;
-            if consecutive_count > 5 {
-                return Err("Message contains too many repeated characters.".to_string());
-            }
-        } else {
-            consecutive_count = 1;
-            prev_char = c;
-        }
-    }
-    
-    let has_vowels = trimmed.to_lowercase().chars()
-        .any(|c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u'));
-    
-    if !has_vowels && letter_count > 5 {
-        return Err("Message appears to be unreadable. Please use normal words.".to_string());
-    }
-    
-    Ok(())
 }
 
 /// Validate that the message hash is in the correct format (64-char hex)
@@ -231,27 +149,6 @@ fn validate_message_hash(hash: &str) -> Result<(), String> {
     }
     
     Ok(())
-}
-
-/// Derive commitment hash from message hash
-/// In real ISMP, this is computed from the message content using cryptographic hashing
-fn derive_commitment_hash(message_hash: &str) -> String {
-    // Simulate ISMP commitment derivation
-    // Real implementation would use: keccak256(encode(request))
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    
-    let mut hasher = DefaultHasher::new();
-    format!("commitment_{}", message_hash).hash(&mut hasher);
-    let hash_value = hasher.finish();
-    
-    // Generate a 64-char hex commitment
-    format!("0x{:016x}{:016x}{:016x}{:016x}", 
-        hash_value, 
-        hash_value.wrapping_mul(31), 
-        hash_value.wrapping_mul(97),
-        hash_value.wrapping_mul(127)
-    )
 }
 
 // ============================================================================
@@ -306,33 +203,8 @@ pub fn App() -> impl IntoView {
         });
     };
 
-    let load_examples = move |_| {
-        web_sys::console::log_1(&"🔍 Load examples button clicked!".into());
-        
-        let examples = generate_testnet_examples();
-        web_sys::console::log_1(&format!("🔍 Generated {} examples", examples.len()).into());
-        
-        set_messages.update(|msgs| {
-            *msgs = examples;
-        });
-        web_sys::console::log_1(&"🔍 Messages state updated".into());
-        
-        set_notification.set(Some("✅ Loaded realistic Hyperbridge testnet examples!".to_string()));
-        web_sys::console::log_1(&"🔍 Notification set".into());
-        
-        spawn_local(async move {
-            let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-                web_sys::window()
-                    .unwrap()
-                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 3000)
-                    .unwrap();
-            });
-            let _ = JsFuture::from(promise).await;
-            set_notification.set(None);
-        });
-    };
 
-    create_effect(move |_| {
+    Effect::new(move |_| {
         let msgs = messages.get();
         for msg in msgs.iter() {
             if matches!(msg.status, MessageStatus::Pending | MessageStatus::InTransit) {
@@ -371,15 +243,6 @@ pub fn App() -> impl IntoView {
                         on_dispatch=dispatch_message
                         is_dispatching=is_dispatching
                     />
-                    
-                    <div class="examples-section">
-                        <button 
-                            class="btn-secondary"
-                            on:click=load_examples
-                        >
-                            "Load Hyperbridge Testnet Examples 🚀"
-                        </button>
-                    </div>
                 </div>
 
                 <div class="activity-section">
@@ -552,37 +415,6 @@ where
     }
 }
 
-#[component]
-fn ActivityLog(messages: ReadSignal<Vec<CrossChainMessage>>) -> impl IntoView {
-    view! {
-        <div class="activity-log">
-            {move || {
-                let msgs = messages.get();
-                web_sys::console::log_1(&format!("🔍 ActivityLog re-rendering with {} messages", msgs.len()).into());
-                
-                if msgs.is_empty() {
-                    web_sys::console::log_1(&"🔍 Showing empty state".into());
-                    view! {
-                        <div class="empty-state">
-                            <p>"No messages yet. Send your first cross-chain message!"</p>
-                        </div>
-                    }.into_any()
-                } else {
-                    web_sys::console::log_1(&format!("🔍 Rendering {} message cards", msgs.len()).into());
-                    view! {
-                        <div class="message-list">
-                            {msgs.iter().rev().map(|msg| {
-                                view! {
-                                    <MessageCard message=msg.clone() />
-                                }
-                            }).collect::<Vec<_>>()}
-                        </div>
-                    }.into_any()
-                }
-            }}
-        </div>
-    }
-}
 
 #[component]
 fn MessageCard(message: CrossChainMessage) -> impl IntoView {
