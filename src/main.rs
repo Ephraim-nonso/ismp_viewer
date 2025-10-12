@@ -12,52 +12,75 @@ use gloo_net::http::Request;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MessageStatus {
-    Pending,
-    InTransit,
-    Delivered,
-    Failed,
+    Pending,               // Dispatched, awaiting delivery
+    Delivered,             // Successfully delivered to destination
+    Timeout,               // Message timed out
+    Failed,                // Delivery failed
+    Unknown,               // Status could not be determined
 }
 
 impl MessageStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             MessageStatus::Pending => "Pending",
-            MessageStatus::InTransit => "In Transit",
             MessageStatus::Delivered => "Delivered",
+            MessageStatus::Timeout => "Timeout",
             MessageStatus::Failed => "Failed",
+            MessageStatus::Unknown => "Unknown",
         }
     }
 
     pub fn color(&self) -> &'static str {
         match self {
-            MessageStatus::Pending => "#FFA500",
-            MessageStatus::InTransit => "#4A90E2",
-            MessageStatus::Delivered => "#4CAF50",
-            MessageStatus::Failed => "#F44336",
+            MessageStatus::Pending => "#FFA500", // Orange
+            MessageStatus::Delivered => "#4CAF50", // Green
+            MessageStatus::Timeout => "#F44336", // Red
+            MessageStatus::Failed => "#D32F2F", // Dark Red
+            MessageStatus::Unknown => "#757575", // Grey
         }
     }
 
     pub fn icon(&self) -> &'static str {
         match self {
             MessageStatus::Pending => "⏳",
-            MessageStatus::InTransit => "🚀",
             MessageStatus::Delivered => "✅",
+            MessageStatus::Timeout => "⏰",
             MessageStatus::Failed => "❌",
+            MessageStatus::Unknown => "❓",
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossChainMessage {
-    pub id: String,                      // Message hash (64-char hex)
-    pub source_chain: String,            // Source chain (e.g., "Paseo")
-    pub dest_chain: String,              // Destination chain (e.g., "Base Sepolia")
-    pub commitment: String,              // Cryptographic proof (derived from message)
-    pub nonce: u64,                      // Unique sequence number
-    pub status: MessageStatus,           // Current status
-    pub timestamp: DateTime<Utc>,        // When dispatched
-    pub fee: String,                     // Fee paid (in DAI or native token)
-    pub relayer: Option<String>,         // Relayer address (if delivered)
+    // Primary identifier
+    pub commitment: String,              // Commitment hash (primary ID)
+    
+    // Source information
+    pub source_chain: String,            // Source chain name
+    pub source_tx_hash: String,          // Source transaction hash
+    pub source_address: String,          // Sender address
+    pub source_timestamp: DateTime<Utc>, // When dispatched
+    
+    // Destination information
+    pub dest_chain: String,              // Destination chain
+    pub dest_tx_hash: Option<String>,    // Delivery transaction hash
+    pub dest_address: String,            // Recipient address
+    pub dest_timestamp: Option<DateTime<Utc>>, // When delivered
+    
+    // Message details
+    pub request_type: String,            // "PostRequest", "PostResponse", "GetResponse"
+    pub status: MessageStatus,           // Current delivery status
+    pub amount: Option<String>,          // Amount transferred
+    
+    // Metrics
+    pub transit_time: Option<String>,    // Time from dispatch to delivery
+    pub relayer: Option<String>,         // Relayer address
+    pub relayer_fee: Option<String>,     // Fee paid to relayer
+    
+    // Technical
+    pub nonce: u64,                      // Sequence number
+    pub timeout_timestamp: Option<u64>,  // When message expires
 }
 
 // ============================================================================
@@ -67,23 +90,14 @@ pub struct CrossChainMessage {
 const BACKEND_URL: &str = "http://127.0.0.1:8080";
 
 #[derive(Serialize, Deserialize)]
-struct DispatchRequest {
-    source: String,
-    destination: String,
-    message_hash: String,  // 64-char hex hash
+struct QueryRequest {
+    commitment: String,           // Commitment hash (64-char hex)
+    source: Option<String>,       // Optional: source chain for faster search
 }
 
-/// Dispatch a message to the backend API
-async fn dispatch_message_api(
-    source: String,
-    destination: String,
-    message_hash: String,
-) -> Result<CrossChainMessage, String> {
-    let request_body = DispatchRequest {
-        source,
-        destination,
-        message_hash,
-    };
+/// Query a message by commitment hash (with optional source chain)
+async fn query_message_api(commitment: String, source: Option<String>) -> Result<CrossChainMessage, String> {
+    let request_body = QueryRequest { commitment, source };
 
     let response = Request::post(&format!("{}/api/dispatch", BACKEND_URL))
         .json(&request_body)
@@ -116,13 +130,17 @@ async fn query_message_status_stub(_message_id: String) -> Result<MessageStatus,
     });
     let _ = JsFuture::from(promise).await;
 
-    let rand = (js_sys::Math::random() * 4.0) as u32;
+    let rand = (js_sys::Math::random() * 8.0) as u32;
     
     Ok(match rand {
         0 => MessageStatus::Pending,
-        1 => MessageStatus::InTransit,
-        2 => MessageStatus::Delivered,
-        _ => MessageStatus::Failed,
+        1 => MessageStatus::Delivered,
+        2 => MessageStatus::Pending,
+        3 => MessageStatus::Delivered,
+        4 => MessageStatus::Pending,
+        5 => MessageStatus::Delivered,
+        6 => MessageStatus::Timeout,
+        _ => MessageStatus::Timeout,
     })
 }
 
@@ -161,16 +179,20 @@ pub fn App() -> impl IntoView {
     let (is_dispatching, set_is_dispatching) = signal(false);
     let (notification, set_notification) = signal(None::<String>);
 
-    let dispatch_message = move |source: String, destination: String, message_hash: String| {
-        web_sys::console::log_1(&"🚀 dispatch_message called from form".into());
+    let dispatch_message = move |commitment: String, source: Option<String>| {
+        web_sys::console::log_1(&"🚀 Querying commitment...".into());
         spawn_local(async move {
-            web_sys::console::log_1(&"📡 Starting async dispatch...".into());
+            if let Some(ref src) = source {
+                web_sys::console::log_1(&format!("📡 Searching on {}: {}", src, &commitment).into());
+            } else {
+                web_sys::console::log_1(&format!("📡 Auto-searching all chains: {}", &commitment).into());
+            }
             set_is_dispatching.set(true);
             
-            // Call the REAL backend API!
-            match dispatch_message_api(source, destination, message_hash).await {
+            // Call the backend API with commitment hash and optional source
+            match query_message_api(commitment.clone(), source).await {
                 Ok(message) => {
-                    web_sys::console::log_1(&format!("✅ Got message from backend: {:?}", message.id).into());
+                    web_sys::console::log_1(&format!("✅ Found message: {}", &message.commitment).into());
                     
                     set_messages.update(|msgs| {
                         web_sys::console::log_1(&format!("📝 Before push: {} messages", msgs.len()).into());
@@ -179,7 +201,7 @@ pub fn App() -> impl IntoView {
                     });
                     
                     web_sys::console::log_1(&"🔔 Setting notification...".into());
-                    set_notification.set(Some(format!("✅ Message dispatched via backend! ID: {}", &message.id[..8])));
+                    set_notification.set(Some(format!("✅ Message found! {} → {}", message.source_chain, message.dest_chain)));
                     
                     spawn_local(async move {
                         let promise = js_sys::Promise::new(&mut |resolve, _reject| {
@@ -194,11 +216,11 @@ pub fn App() -> impl IntoView {
                 }
                 Err(e) => {
                     web_sys::console::log_1(&format!("❌ Backend error: {}", e).into());
-                    set_notification.set(Some(format!("❌ Backend Error: {}", e)));
+                    set_notification.set(Some(format!("❌ Error: {}", e)));
                 }
             }
             
-            web_sys::console::log_1(&"✅ Dispatch complete, setting is_dispatching to false".into());
+            web_sys::console::log_1(&"✅ Query complete".into());
             set_is_dispatching.set(false);
         });
     };
@@ -207,12 +229,13 @@ pub fn App() -> impl IntoView {
     Effect::new(move |_| {
         let msgs = messages.get();
         for msg in msgs.iter() {
-            if matches!(msg.status, MessageStatus::Pending | MessageStatus::InTransit) {
-                let msg_id = msg.id.clone();
+            // Check for messages awaiting delivery
+            if matches!(msg.status, MessageStatus::Pending) {
+                let msg_id = msg.commitment.clone();
                 spawn_local(async move {
                     if let Ok(new_status) = query_message_status_stub(msg_id.clone()).await {
                         set_messages.update(|messages| {
-                            if let Some(m) = messages.iter_mut().find(|m| m.id == msg_id) {
+                            if let Some(m) = messages.iter_mut().find(|m| m.commitment == msg_id) {
                                 m.status = new_status;
                             }
                         });
@@ -260,7 +283,7 @@ pub fn App() -> impl IntoView {
                                 <div class="message-list">
                                     <For
                                         each=move || messages.get()
-                                        key=|msg| msg.id.clone()
+                                        key=|msg| msg.commitment.clone()
                                         children=move |msg: CrossChainMessage| {
                                             view! {
                                                 <MessageCard message=msg />
@@ -286,7 +309,7 @@ fn Header() -> impl IntoView {
                     <span class="logo">"🌐"</span>
                     " ISMP Viewer"
                 </h1>
-                <p class="subtitle">"Cross-Chain Message Tracker powered by Hyperbridge"</p>
+                <p class="subtitle">"Cross-Chain Message Tracker • Hyperbridge Mainnet • 14+ Networks"</p>
             </div>
         </header>
     }
@@ -298,52 +321,55 @@ fn MessageDispatcherForm<F>(
     is_dispatching: ReadSignal<bool>,
 ) -> impl IntoView
 where
-    F: Fn(String, String, String) + 'static + Copy,
+    F: Fn(String, Option<String>) + 'static + Copy,
 {
-    let (source_chain, set_source_chain) = signal(String::from("paseo"));
-    let (dest_chain, set_dest_chain) = signal(String::from("base-sepolia"));
-    let (message_hash, set_message_hash) = signal(String::new());
+    let (commitment_hash, set_commitment_hash) = signal(String::new());
+    let (source_chain, set_source_chain) = signal(String::from("auto"));
     let (error, set_error) = signal(None::<String>);
 
     let chains = vec![
-        ("paseo", "Paseo (Polkadot Testnet)"),
-        ("base-sepolia", "Base Sepolia"),
-        ("arbitrum-sepolia", "Arbitrum Sepolia"),
-        ("optimism-sepolia", "Optimism Sepolia"),
-        ("bsc-testnet", "BSC Testnet"),
+        ("auto", "🔍 Auto-detect (search all chains)"),
+        ("ethereum", "Ethereum Mainnet"),
+        ("arbitrum", "Arbitrum One"),
+        ("optimism", "OP Mainnet"),
+        ("base", "Base"),
+        ("bsc", "BSC (BNB Chain)"),
+        ("gnosis", "Gnosis Chain"),
+        ("scroll", "Scroll"),
+        ("soneium", "Soneium"),
+        ("polygon", "Polygon PoS"),
+        ("unichain", "Unichain"),
+        ("bifrost", "🪐 Bifrost (Polkadot)"),
+        ("polkadot_asset_hub", "🪐 Polkadot Asset Hub"),
     ];
 
     let handle_submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         set_error.set(None);
 
+        let hash = commitment_hash.get();
         let source = source_chain.get();
-        let dest = dest_chain.get();
-        let hash = message_hash.get();
-
-        if source.is_empty() || dest.is_empty() {
-            set_error.set(Some("Please select both source and destination chains".to_string()));
-            return;
-        }
-
-        if source == dest {
-            set_error.set(Some("Source and destination chains must be different".to_string()));
-            return;
-        }
 
         if hash.trim().is_empty() {
-            set_error.set(Some("Message hash cannot be empty".to_string()));
+            set_error.set(Some("Commitment hash cannot be empty".to_string()));
             return;
         }
         
-        // Validate message hash format
+        // Validate commitment hash format
         if let Err(validation_error) = validate_message_hash(&hash) {
             set_error.set(Some(validation_error));
             return;
         }
         
-        on_dispatch(source, dest, hash.clone());
-        set_message_hash.set(String::new());
+        // Pass source if not "auto"
+        let source_opt = if source == "auto" {
+            None
+        } else {
+            Some(source)
+        };
+        
+        on_dispatch(hash.clone(), source_opt);
+        set_commitment_hash.set(String::new());
     };
 
     view! {
@@ -357,7 +383,7 @@ where
             })}
 
             <div class="form-group">
-                <label>"Source Chain"</label>
+                <label>"Source Chain " <span style="color: #666; font-weight: normal;">"(optional - speeds up search!)"</span></label>
                 <select
                     class="form-control"
                     on:change=move |ev| set_source_chain.set(event_target_value(&ev))
@@ -371,36 +397,22 @@ where
                         }
                     }).collect::<Vec<_>>()}
                 </select>
+                <small class="char-count" style="color: #666;">
+                    "💡 Specify source for 10x faster search (if known from Hyperbridge Explorer)"
+                </small>
             </div>
 
             <div class="form-group">
-                <label>"Destination Chain"</label>
-                <select
-                    class="form-control"
-                    on:change=move |ev| set_dest_chain.set(event_target_value(&ev))
-                    prop:value=move || dest_chain.get()
-                >
-                    {chains.iter().map(|(value, label)| {
-                        let value_str = value.to_string();
-                        let label_str = label.to_string();
-                        view! {
-                            <option value=value_str>{label_str}</option>
-                        }
-                    }).collect::<Vec<_>>()}
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label>"Message Hash (Transaction ID)"</label>
+                <label>"Commitment Hash " <span style="color: #666; font-weight: normal;">"(from Hyperbridge Explorer)"</span></label>
                 <input
                     type="text"
                     class="form-control"
-                    placeholder="0x8dd8443f837f2bbcd9c5b27e47587aa5ffd573c15c87e0f2d19ce89f6a9e9c7a"
-                    on:input=move |ev| set_message_hash.set(event_target_value(&ev))
-                    prop:value=move || message_hash.get()
+                    placeholder="0xa1d176071b47f8b9cb59a33ebc6e4ea503c5f7b168746dace8b15c47b03ce07d"
+                    on:input=move |ev| set_commitment_hash.set(event_target_value(&ev))
+                    prop:value=move || commitment_hash.get()
                 />
                 <small class="char-count" style="color: #666;">
-                    "64-character hex hash (e.g., from Hyperbridge Explorer)"
+                    "✨ Destination will be automatically detected from blockchain"
                 </small>
             </div>
 
@@ -409,7 +421,7 @@ where
                 class="btn-primary"
                 disabled=move || is_dispatching.get()
             >
-                "Send Message 🚀"
+                "Track Message 🔍"
             </button>
         </form>
     }
@@ -418,15 +430,15 @@ where
 
 #[component]
 fn MessageCard(message: CrossChainMessage) -> impl IntoView {
-    let formatted_time = message.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
-    let short_id = message.id[..8].to_string();
+    let formatted_source_time = message.source_timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let short_commitment = format!("{}...{}", &message.commitment[..10], &message.commitment[message.commitment.len()-8..]);
 
     view! {
         <div class="message-card">
             <div class="message-header">
                 <div class="message-id">
-                    <strong>"ID: "</strong>
-                    <code>{format!("{}...", short_id)}</code>
+                    <strong>"Commitment: "</strong>
+                    <code>{short_commitment}</code>
                 </div>
                 <StatusIndicator status=message.status.clone() />
             </div>
@@ -438,33 +450,55 @@ fn MessageCard(message: CrossChainMessage) -> impl IntoView {
                     <span class="chain-badge dest">{message.dest_chain.clone()}</span>
                 </div>
 
+                <div style="margin: 12px 0; padding: 8px 12px; background: rgba(99, 102, 241, 0.1); border-left: 3px solid var(--primary-color); border-radius: 4px;">
+                    <strong style="color: var(--primary-light);">"Request Type: "</strong>
+                    <span style="color: var(--text-primary);">{message.request_type.clone()}</span>
+                </div>
+
                 <div class="message-details" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; font-size: 0.9em;">
                     <div>
-                        <strong>"Commitment: "</strong>
-                        <code style="font-size: 0.85em;">{format!("{}...{}", &message.commitment[..10], &message.commitment[message.commitment.len()-8..])}</code>
+                        <strong>"Source TX: "</strong>
+                        <code style="font-size: 0.85em;">{format!("{}...{}", &message.source_tx_hash[..8], &message.source_tx_hash[message.source_tx_hash.len()-6..])}</code>
                     </div>
                     <div>
                         <strong>"Nonce: "</strong>
                         <span>{message.nonce}</span>
                     </div>
                     <div>
-                        <strong>"Fee: "</strong>
-                        <span>{message.fee.clone()}</span>
+                        <strong>"Amount: "</strong>
+                        <span>{message.amount.as_ref().unwrap_or(&"N/A".to_string()).clone()}</span>
+                    </div>
+                    <div>
+                        <strong>"Transit Time: "</strong>
+                        <span>{message.transit_time.as_ref().unwrap_or(&"Pending...".to_string()).clone()}</span>
+                    </div>
+                    <div>
+                        <strong>"Relayer Fee: "</strong>
+                        <span>{message.relayer_fee.as_ref().unwrap_or(&"N/A".to_string()).clone()}</span>
                     </div>
                     <div>
                         <strong>"Relayer: "</strong>
                         <span>
                             {message.relayer.as_ref().map(|r| format!("{}...{}", &r[..6], &r[r.len()-4..]))
-                                .unwrap_or_else(|| "Pending".to_string())}
+                                .unwrap_or_else(|| "N/A".to_string())}
                         </span>
                     </div>
                 </div>
 
                 <div class="message-meta" style="margin-top: 12px;">
                     <small class="timestamp">
-                        <span>"🕐 "</span>
-                        {formatted_time}
+                        <span>"🕐 Dispatched: "</span>
+                        {formatted_source_time}
                     </small>
+                    {message.dest_timestamp.map(|dt| {
+                        let formatted = dt.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+                        view! {
+                            <small class="timestamp" style="margin-left: 12px;">
+                                <span>"✅ Delivered: "</span>
+                                {formatted}
+                            </small>
+                        }
+                    })}
                 </div>
             </div>
         </div>
