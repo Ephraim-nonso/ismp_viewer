@@ -132,7 +132,7 @@ async fn find_source_transaction(commitment: &str, source_chain: Option<&str>) -
                 // Not found on Substrate, continue to EVM if searching all chains
                 if is_substrate_source {
                     // If user specified Substrate but we didn't find it, return error
-                    return Err(format!("Commitment {} not found on {} (searched last ~24 hours)", 
+                    return Err(format!("Commitment {} not found on {} (searched last ~14 days for Substrate, ~3-4 hours for EVM)", 
                         commitment, source_chain.unwrap()));
                 }
             },

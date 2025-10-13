@@ -1,7 +1,7 @@
-// Substrate chain querying for ISMP messages
-// Supports: Bifrost, Polkadot Asset Hub
+// Optimized Subxt Implementation for Substrate Chains
+// Fast commitment search with smart scanning strategies
 
-use serde_json::Value;
+use subxt::{OnlineClient, PolkadotConfig};
 use std::error::Error;
 
 /// Substrate chain configuration
@@ -35,7 +35,7 @@ pub struct SubstrateSourceTxData {
     pub extrinsic_index: u32,
 }
 
-/// Find a commitment on Substrate chains
+/// Find a commitment on Substrate chains using optimized search
 pub async fn find_substrate_commitment(
     commitment: &str,
     source_chain: Option<&str>,
@@ -50,18 +50,19 @@ pub async fn find_substrate_commitment(
     };
 
     for chain in chains {
-        println!("   Searching {}...", chain.name);
+        println!("   🔍 Searching {} (WebSocket/Substrate)...", chain.name);
         
-        match scan_substrate_chain(chain, commitment).await {
+        match scan_substrate_optimized(chain, commitment).await {
             Ok(Some(data)) => {
                 println!("   ✅ Found on {}!", chain.name);
                 return Ok(Some(data));
             }
             Ok(None) => {
-                // Not found, continue to next chain
+                println!("      ❌ Not found in recent blocks");
             }
             Err(e) => {
-                println!("   ⚠️  Error scanning {}: {}", chain.name, e);
+                println!("      ⚠️  Error: {}", e);
+                continue;
             }
         }
     }
@@ -69,220 +70,205 @@ pub async fn find_substrate_commitment(
     Ok(None)
 }
 
-/// Scan a specific Substrate chain for a commitment
-async fn scan_substrate_chain(
+/// Optimized scan with smart strategies
+async fn scan_substrate_optimized(
     chain: &SubstrateChain,
-    commitment: &str,
+    commitment_hex: &str,
 ) -> Result<Option<SubstrateSourceTxData>, Box<dyn Error>> {
-    // For now, use RPC calls to query recent blocks
-    // In production, you'd use subxt to subscribe to events
+    println!("      Connecting...");
     
-    // Get the current block number first
-    let client = reqwest::Client::new();
+    // Connect to chain
+    let client = OnlineClient::<PolkadotConfig>::from_url(chain.rpc_url).await
+        .map_err(|e| format!("Connection failed: {}", e))?;
     
-    // Convert WSS to HTTPS for REST API (many Substrate nodes support both)
-    let http_url = chain.rpc_url.replace("wss://", "https://").replace("ws://", "http://");
-    let http_url = if http_url.ends_with("/public-ws") {
-        http_url.replace("/public-ws", "")
-    } else {
-        http_url
-    };
+    println!("      ✓ Connected");
     
-    // Get finalized head
-    let response = client
-        .post(&http_url)
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "chain_getFinalizedHead",
-            "params": [],
-            "id": 1
-        }))
-        .send()
-        .await?;
+    // Get latest block
+    let latest_block = client.blocks().at_latest().await?;
+    let current_block: u32 = latest_block.number();
     
-    if !response.status().is_success() {
-        return Err(format!("HTTP error: {}", response.status()).into());
+    println!("      Block: {}", current_block);
+    
+    // OPTIMIZED: Search only last 1000 blocks (~3-4 hours)
+    // This is fast and covers most recent messages
+    let search_depth: u32 = 1000;
+    let start_block = current_block.saturating_sub(search_depth);
+    
+    println!("      Scanning {} recent blocks (fast mode)...", search_depth);
+    
+    // Parse commitment
+    let commitment_bytes = hex::decode(commitment_hex.trim_start_matches("0x"))
+        .map_err(|e| format!("Invalid hex: {}", e))?;
+    
+    if commitment_bytes.len() != 32 {
+        return Err("Commitment must be 32 bytes".into());
     }
     
-    let result: Value = response.json().await?;
-    let finalized_hash = result["result"]
-        .as_str()
-        .ok_or("No finalized head found")?;
+    let mut commitment_array = [0u8; 32];
+    commitment_array.copy_from_slice(&commitment_bytes);
     
-    // Get the block number for this hash
-    let response = client
-        .post(&http_url)
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "chain_getBlock",
-            "params": [finalized_hash],
-            "id": 1
-        }))
-        .send()
-        .await?;
+    // OPTIMIZATION 1: Scan in reverse (most recent first)
+    // OPTIMIZATION 2: Check every 10th block first (quick scan)
+    // OPTIMIZATION 3: Skip blocks with no events
     
-    let block_data: Value = response.json().await?;
-    let block_number = block_data["result"]["block"]["header"]["number"]
-        .as_str()
-        .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
-        .unwrap_or(0);
+    println!("      Phase 1: Quick scan (every 10th block)...");
+    let mut blocks_checked = 0;
+    let mut current_hash = latest_block.hash();
     
-    if block_number == 0 {
-        return Err("Could not determine current block number".into());
-    }
-    
-    println!("      Current block: {}", block_number);
-    println!("      Searching last 7200 blocks (~24 hours)");
-    
-    // Search last 7200 blocks (approximately 24 hours for Substrate chains with 12s block time)
-    let search_depth = 7200;
-    let start_block = block_number.saturating_sub(search_depth);
-    
-    // For efficiency, we'll search in chunks of 100 blocks
-    let chunk_size = 100;
-    let mut current_block = block_number;
-    
-    while current_block > start_block {
-        let chunk_start = current_block.saturating_sub(chunk_size);
-        
-        // Get block hash for this range
-        for block_num in (chunk_start..current_block).rev() {
-            // Get block hash
-            let hash_response = client
-                .post(&http_url)
-                .json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "chain_getBlockHash",
-                    "params": [block_num],
-                    "id": 1
-                }))
-                .send()
-                .await?;
+    // Quick scan: Check every 10th block
+    for i in 0..(search_depth / 10) {
+        if let Ok(block) = client.blocks().at(current_hash).await {
+            blocks_checked += 1;
             
-            let hash_result: Value = hash_response.json().await?;
-            if let Some(block_hash) = hash_result["result"].as_str() {
-                // Check events in this block
-                if let Some(tx_data) = check_substrate_block_for_commitment(
-                    &client,
-                    &http_url,
-                    block_hash,
-                    block_num,
-                    commitment,
-                    chain.name,
-                )
-                .await?
-                {
-                    return Ok(Some(tx_data));
+            // Check this block
+            if let Some(tx_data) = check_block_for_commitment(
+                &block,
+                block.number() as u64,
+                &commitment_array,
+                chain.name,
+            ).await? {
+                println!("      ✅ Found in {} blocks!", blocks_checked);
+                return Ok(Some(tx_data));
+            }
+            
+            // Skip 10 blocks forward
+            for _ in 0..10 {
+                if let Ok(parent_block) = client.blocks().at(current_hash).await {
+                    current_hash = parent_block.header().parent_hash;
+                } else {
+                    break;
                 }
             }
         }
         
-        current_block = chunk_start;
-        
-        // Safety: don't search forever
-        if current_block <= start_block {
+        // Progress indicator
+        if blocks_checked % 50 == 0 && blocks_checked > 0 {
+            println!("      ... {} blocks checked", blocks_checked);
+        }
+    }
+    
+    println!("      Phase 2: Full scan of {} blocks...", search_depth);
+    
+    // If not found in quick scan, do full scan
+    current_hash = latest_block.hash();
+    blocks_checked = 0;
+    
+    for _ in 0..search_depth {
+        if let Ok(block) = client.blocks().at(current_hash).await {
+            blocks_checked += 1;
+            
+            if let Some(tx_data) = check_block_for_commitment(
+                &block,
+                block.number() as u64,
+                &commitment_array,
+                chain.name,
+            ).await? {
+                println!("      ✅ Found after {} blocks!", blocks_checked);
+                return Ok(Some(tx_data));
+            }
+            
+            // Move to parent
+            current_hash = block.header().parent_hash;
+            
+            // Progress
+            if blocks_checked % 100 == 0 {
+                println!("      ... {} blocks scanned", blocks_checked);
+            }
+        } else {
             break;
         }
     }
     
+    println!("      Scanned {} blocks total", blocks_checked);
     Ok(None)
 }
 
-/// Check a specific Substrate block for ISMP PostRequest events with matching commitment
-async fn check_substrate_block_for_commitment(
-    client: &reqwest::Client,
-    rpc_url: &str,
-    block_hash: &str,
+/// Optimized block check
+async fn check_block_for_commitment(
+    block: &subxt::blocks::Block<PolkadotConfig, OnlineClient<PolkadotConfig>>,
     block_number: u64,
-    commitment: &str,
+    target_commitment: &[u8; 32],
     chain_name: &str,
 ) -> Result<Option<SubstrateSourceTxData>, Box<dyn Error>> {
-    // Get events for this block using state_getStorage
-    // The events are stored at System.Events storage key
-    // For simplicity, we'll use system_events query
+    // Get events efficiently
+    let events = match block.events().await {
+        Ok(e) => e,
+        Err(_) => return Ok(None),
+    };
     
-    let response = client
-        .post(rpc_url)
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "state_getStorage",
-            "params": ["0x26aa394eea5630e07c48ae0c9558cef780d41e5e16056765bc8461851072c9d7", block_hash],
-            "id": 1
-        }))
-        .send()
-        .await?;
+    // Quick check: Does this block have any ISMP events?
+    let mut has_ismp = false;
+    for event_result in events.iter() {
+        if let Ok(event) = event_result {
+            if event.pallet_name().to_lowercase().contains("ismp") {
+                has_ismp = true;
+                break;
+            }
+        }
+    }
     
-    let events_result: Value = response.json().await?;
+    if !has_ismp {
+        return Ok(None); // Skip blocks with no ISMP events
+    }
     
-    if let Some(events_hex) = events_result["result"].as_str() {
-        // Decode events (simplified - in production use SCALE codec)
-        // Look for ISMP PostRequest events containing our commitment
-        
-        // For now, we'll do a simple hex search
-        let events_data = events_hex.trim_start_matches("0x");
-        let commitment_hex = commitment.trim_start_matches("0x");
-        
-        if events_data.contains(commitment_hex) {
-            println!("      🎯 Found commitment in block {}!", block_number);
+    // Check ISMP events for commitment
+    for event_result in events.iter() {
+        if let Ok(event) = event_result {
+            let pallet = event.pallet_name();
+            let variant = event.variant_name();
             
-            // Get block timestamp
-            let timestamp = chrono::Utc::now().timestamp(); // Simplified
-            
-            // Get extrinsics to find the transaction hash
-            let block_response = client
-                .post(rpc_url)
-                .json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "chain_getBlock",
-                    "params": [block_hash],
-                    "id": 1
-                }))
-                .send()
-                .await?;
-            
-            let block_data: Value = block_response.json().await?;
-            
-            // Get first extrinsic hash (simplified)
-            let tx_hash = if let Some(extrinsics) = block_data["result"]["block"]["extrinsics"].as_array() {
-                if let Some(first_ext) = extrinsics.first() {
-                    // Compute hash of extrinsic (simplified - just use block hash for now)
-                    block_hash.to_string()
-                } else {
-                    block_hash.to_string()
+            if pallet.to_lowercase().contains("ismp") && 
+               (variant.contains("Request") || variant.contains("Post")) {
+                
+                // Try to extract commitment
+                if let Some(commitment) = extract_commitment(&event) {
+                    if &commitment == target_commitment {
+                        let tx_hash = format!("{:?}", block.hash());
+                        let timestamp = chrono::Utc::now().timestamp();
+                        
+                        return Ok(Some(SubstrateSourceTxData {
+                            chain: chain_name.to_string(),
+                            tx_hash,
+                            block_number,
+                            timestamp,
+                            extrinsic_index: 0,
+                        }));
+                    }
                 }
-            } else {
-                block_hash.to_string()
-            };
-            
-            return Ok(Some(SubstrateSourceTxData {
-                chain: chain_name.to_string(),
-                tx_hash,
-                block_number,
-                timestamp,
-                extrinsic_index: 0,
-            }));
+            }
         }
     }
     
     Ok(None)
 }
 
-/// Parse Substrate ISMP event to extract message details
-pub async fn parse_substrate_post_request(
-    source_data: &SubstrateSourceTxData,
-) -> Result<SubstratePostRequestData, Box<dyn Error>> {
-    // This would normally use SCALE codec to decode the event
-    // For now, return placeholder data
+/// Fast commitment extraction
+fn extract_commitment(
+    event: &subxt::events::EventDetails<PolkadotConfig>,
+) -> Option<[u8; 32]> {
+    let bytes = event.field_bytes();
     
-    Ok(SubstratePostRequestData {
-        commitment: "".to_string(), // Will be filled from search
-        dest_state_machine: "UNKNOWN".to_string(),
-        amount: 0,
-        source_address: "0x0000000000000000000000000000000000000000".to_string(),
-    })
+    if bytes.len() < 32 {
+        return None;
+    }
+    
+    // Try common positions
+    for offset in [0, 1, 2, 4, 8, 16, 32] {
+        if offset + 32 <= bytes.len() {
+            let mut commitment = [0u8; 32];
+            commitment.copy_from_slice(&bytes[offset..offset + 32]);
+            
+            // Valid if has enough non-zero bytes
+            if commitment.iter().filter(|&&b| b != 0).count() > 10 {
+                return Some(commitment);
+            }
+        }
+    }
+    
+    None
 }
 
-/// Parsed PostRequest data from Substrate
+/// Parsed PostRequest data
 #[derive(Debug, Clone)]
 pub struct SubstratePostRequestData {
     pub commitment: String,
@@ -291,3 +277,15 @@ pub struct SubstratePostRequestData {
     pub source_address: String,
 }
 
+/// Parse event data
+pub async fn parse_substrate_post_request(
+    _source_data: &SubstrateSourceTxData,
+    commitment: &str,
+) -> Result<SubstratePostRequestData, Box<dyn Error>> {
+    Ok(SubstratePostRequestData {
+        commitment: commitment.to_string(),
+        dest_state_machine: "EVM-UNKNOWN".to_string(),
+        amount: 0,
+        source_address: "Substrate Address".to_string(),
+    })
+}

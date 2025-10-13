@@ -324,11 +324,10 @@ where
     F: Fn(String, Option<String>) + 'static + Copy,
 {
     let (commitment_hash, set_commitment_hash) = signal(String::new());
-    let (source_chain, set_source_chain) = signal(String::from("auto"));
+    let (source_chain, set_source_chain) = signal(String::from("ethereum"));
     let (error, set_error) = signal(None::<String>);
 
     let chains = vec![
-        ("auto", "🔍 Auto-detect (search all chains)"),
         ("ethereum", "Ethereum Mainnet"),
         ("arbitrum", "Arbitrum One"),
         ("optimism", "OP Mainnet"),
@@ -361,14 +360,8 @@ where
             return;
         }
         
-        // Pass source if not "auto"
-        let source_opt = if source == "auto" {
-            None
-        } else {
-            Some(source)
-        };
-        
-        on_dispatch(hash.clone(), source_opt);
+        // Always pass the source chain (required for faster search)
+        on_dispatch(hash.clone(), Some(source));
         set_commitment_hash.set(String::new());
     };
 
@@ -383,7 +376,7 @@ where
             })}
 
             <div class="form-group">
-                <label>"Source Chain " <span style="color: #666; font-weight: normal;">"(optional - speeds up search!)"</span></label>
+                <label>"Source Chain " <span style="color: #ff4444; font-weight: normal;">"*"</span></label>
                 <select
                     class="form-control"
                     on:change=move |ev| set_source_chain.set(event_target_value(&ev))
@@ -398,7 +391,7 @@ where
                     }).collect::<Vec<_>>()}
                 </select>
                 <small class="char-count" style="color: #666;">
-                    "💡 Specify source for 10x faster search (if known from Hyperbridge Explorer)"
+                    "⚡ Select the chain where the message originated (check Hyperbridge Explorer)"
                 </small>
             </div>
 
