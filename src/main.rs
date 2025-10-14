@@ -42,11 +42,11 @@ impl MessageStatus {
 
     pub fn icon(&self) -> &'static str {
         match self {
-            MessageStatus::Pending => "⏳",
-            MessageStatus::Delivered => "✅",
-            MessageStatus::Timeout => "⏰",
-            MessageStatus::Failed => "❌",
-            MessageStatus::Unknown => "❓",
+            MessageStatus::Pending => "",
+            MessageStatus::Delivered => "",
+            MessageStatus::Timeout => "",
+            MessageStatus::Failed => "",
+            MessageStatus::Unknown => "",
         }
     }
 }
@@ -269,7 +269,7 @@ pub fn App() -> impl IntoView {
                 </div>
 
                 <div class="activity-section">
-                    <h2>"📊 Activity Log"</h2>
+                    <h2>"ACTIVITY LOG"</h2>
                     {move || {
                         let msgs = messages.get();
                         if msgs.is_empty() {
@@ -306,10 +306,9 @@ fn Header() -> impl IntoView {
         <header class="header">
             <div class="header-content">
                 <h1 class="title">
-                    <span class="logo">"🌐"</span>
-                    " ISMP Viewer"
+                    "ISMP VIEWER"
                 </h1>
-                <p class="subtitle">"Cross-Chain Message Tracker • Hyperbridge Mainnet • 14+ Networks"</p>
+                <p class="subtitle">"CROSS-CHAIN MESSAGE TRACKING FOR HYPERBRIDGE MAINNET"</p>
             </div>
         </header>
     }
@@ -338,8 +337,8 @@ where
         ("soneium", "Soneium"),
         ("polygon", "Polygon PoS"),
         ("unichain", "Unichain"),
-        ("bifrost", "🪐 Bifrost (Polkadot)"),
-        ("polkadot_asset_hub", "🪐 Polkadot Asset Hub"),
+        ("bifrost", "Bifrost (Polkadot)"),
+        ("polkadot_asset_hub", "Polkadot Asset Hub"),
     ];
 
     let handle_submit = move |ev: leptos::ev::SubmitEvent| {
@@ -391,7 +390,7 @@ where
                     }).collect::<Vec<_>>()}
                 </select>
                 <small class="char-count" style="color: #666;">
-                    "⚡ Select the chain where the message originated (check Hyperbridge Explorer)"
+                    "Select the chain where the message originated"
                 </small>
             </div>
 
@@ -405,7 +404,7 @@ where
                     prop:value=move || commitment_hash.get()
                 />
                 <small class="char-count" style="color: #666;">
-                    "✨ Destination will be automatically detected from blockchain"
+                    "Destination will be automatically detected from blockchain"
                 </small>
             </div>
 
@@ -414,7 +413,7 @@ where
                 class="btn-primary"
                 disabled=move || is_dispatching.get()
             >
-                "Track Message 🔍"
+                "TRACK MESSAGE"
             </button>
         </form>
     }
@@ -487,7 +486,7 @@ fn MessageCard(message: CrossChainMessage) -> impl IntoView {
                         let formatted = dt.format("%Y-%m-%d %H:%M:%S UTC").to_string();
                         view! {
                             <small class="timestamp" style="margin-left: 12px;">
-                                <span>"✅ Delivered: "</span>
+                                <span>"Delivered: "</span>
                                 {formatted}
                             </small>
                         }
